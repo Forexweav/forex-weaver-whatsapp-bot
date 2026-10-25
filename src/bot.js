@@ -6,7 +6,9 @@ const {
 } = require("@whiskeysockets/baileys");
 
 const pino = require("pino");
-const qrcode = require("qrcode-terminal");
+
+let reconnectTimer;
+let pairingRequested = false;
 
 async function startBot() {
   const { state, saveCreds } =
@@ -20,23 +22,42 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", (update) => {
+  sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      console.log("Scan this QR code using WhatsApp Linked Devices:");
-      qrcode.generate(qr, { small: true });
+    if (
+      qr &&
+      !state.creds.registered &&
+      process.env.BOT_PHONE_NUMBER &&
+      !pairingRequested
+    ) {
+      pairingRequested = true;
+
+      try {
+        const phone = process.env.BOT_PHONE_NUMBER.replace(/\D/g, "");
+        const code = await sock.requestPairingCode(phone);
+        console.log("WhatsApp pairing code:", code);
+        console.log(
+          "On your phone, open WhatsApp Business > Linked devices > Link a device > Link with phone number."
+        );
+      } catch (error) {
+        pairingRequested = false;
+        console.error("Could not generate pairing code:", error.message);
+      }
     }
 
     if (connection === "open") {
       console.log("WhatsApp connected successfully!");
+      pairingRequested = false;
     }
 
     if (connection === "close") {
       const code = lastDisconnect?.error?.output?.statusCode;
 
       if (code !== DisconnectReason.loggedOut) {
-        setTimeout(startBot, 3000);
+        pairingRequested = false;
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(startBot, 5000);
       } else {
         console.log("WhatsApp logged out. Pair again to reconnect.");
       }
