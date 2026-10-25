@@ -7,89 +7,142 @@ const {
 
 const pino = require("pino");
 
-let reconnectTimer;
+let reconnectTimer = null;
 let pairingRequested = false;
+let starting = false;
 
 async function startBot() {
-  const { state, saveCreds } =
-    await useMultiFileAuthState("auth_info");
+  if (starting) return;
+  starting = true;
 
-  const sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: "silent" }),
-    browser: ["Forex Weaver", "Chrome", "1.0.0"]
-  });
+  try {
+    const { state, saveCreds } =
+      await useMultiFileAuthState("auth_info");
 
-  sock.ev.on("creds.update", saveCreds);
+    const sock = makeWASocket({
+      auth: state,
+      logger: pino({ level: "silent" }),
+      browser: ["Forex Weaver", "Chrome", "1.0.0"],
+      printQRInTerminal: false
+    });
 
-  sock.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+    sock.ev.on("creds.update", saveCreds);
 
-    if (
-      qr &&
-      !state.creds.registered &&
-      process.env.BOT_PHONE_NUMBER &&
-      !pairingRequested
-    ) {
-      pairingRequested = true;
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-      try {
-        const phone = process.env.BOT_PHONE_NUMBER.replace(/\D/g, "");
-        const code = await sock.requestPairingCode(phone);
-        console.log("WhatsApp pairing code:", code);
+      if (
+        qr &&
+        !state.creds.registered &&
+        process.env.BOT_PHONE_NUMBER &&
+        !pairingRequested
+      ) {
+        pairingRequested = true;
+
+        try {
+          const phone =
+            process.env.BOT_PHONE_NUMBER.replace(/\D/g, "");
+
+          const code = await sock.requestPairingCode(phone);
+
+          console.log("WhatsApp pairing code:", code);
+          console.log(
+            "On WhatsApp Business, open Linked devices, " +
+            "choose Link a device, then Link with phone number."
+          );
+        } catch (error) {
+          pairingRequested = false;
+          console.error(
+            "Pairing code error:",
+            error.message
+          );
+        }
+      }
+
+      if (connection === "open") {
+        console.log("WhatsApp connected successfully!");
+        pairingRequested = false;
+      }
+
+      if (connection === "close") {
+        const code =
+          lastDisconnect?.error?.output?.statusCode;
+        const reason =
+          lastDisconnect?.error?.message;
+
+        console.log("WhatsApp disconnected.");
+        console.log("Disconnect code:", code ?? "unknown");
         console.log(
-          "On your phone, open WhatsApp Business > Linked devices > Link a device > Link with phone number."
+          "Disconnect reason:",
+          reason ?? "not provided"
         );
-      } catch (error) {
-        pairingRequested = false;
-        console.error("Could not generate pairing code:", error.message);
-      }
-    }
 
-    if (connection === "open") {
-      console.log("WhatsApp connected successfully!");
-      pairingRequested = false;
-    }
+        starting = false;
 
-    if (connection === "close") {
-      const code = lastDisconnect?.error?.output?.statusCode;
+        if (code !== DisconnectReason.loggedOut) {
+          pairingRequested = false;
+          clearTimeout(reconnectTimer);
 
-      if (code !== DisconnectReason.loggedOut) {
-        pairingRequested = false;
-        clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(startBot, 5000);
-      } else {
-        console.log("WhatsApp logged out. Pair again to reconnect.");
-      }
-    }
-  });
-
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    for (const msg of messages) {
-      if (!msg?.message || msg.key.fromMe) continue;
-
-      const chat = msg.key.remoteJid;
-      const text =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        "";
-
-      if (text.trim() === "!ping") {
-        await sock.sendMessage(chat, {
-          text: "Pong! 🏓 Forex Weaver is online."
-        });
+          reconnectTimer = setTimeout(() => {
+            startBot().catch((error) => {
+              console.error("Restart error:", error.message);
+            });
+          }, 5000);
+        } else {
+          console.log(
+            "WhatsApp logged out. Check the disconnect details."
+          );
+        }
       }
 
-      if (text.trim() === "!menu") {
-        await sock.sendMessage(chat, {
-          text:
-            "𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊\n\n" +
-            "!menu — Show commands\n" +
-            "!ping — Check bot response"
-        });
+      if (connection === "open") {
+        starting = false;
       }
-    }
-  });
+    });
+
+    sock.ev.on("messages.upsert", async ({ messages }) => {
+      for (const msg of messages) {
+        if (!msg?.message || msg.key.fromMe) continue;
+
+        const chat = msg.key.remoteJid;
+
+        const text =
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          msg.message.videoMessage?.caption ||
+          "";
+
+        const command = text.trim().toLowerCase();
+
+        if (command === "!ping") {
+          await sock.sendMessage(chat, {
+            text: "Pong! 🏓 𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 is responding."
+          });
+        }
+
+        if (command === "!menu") {
+          await sock.sendMessage(chat, {
+            text:
+              "𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 WhatsApp Bot\n\n" +
+              "BASIC COMMANDS\n" +
+              "!menu - Show commands\n" +
+              "!ping - Check bot response\n\n" +
+              "More planned features must be implemented " +
+              "and tested before they will work."
+          });
+        }
+      }
+    });
+  } catch (error) {
+    starting = false;
+    console.error("Bot startup error:", error.message);
+
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+      startBot().catch(console.error);
+    }, 10000);
+  }
 }
 
 startBot().catch(console.error);
