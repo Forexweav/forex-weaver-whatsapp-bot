@@ -21,7 +21,8 @@ async function startBot() {
     const sock = makeWASocket({
       auth: state,
       logger: pino({ level: "silent" }),
-      browser: ["Forex Weaver", "Chrome", "1.0.0"],
+      :
+browser: ["Ubuntu", "Chrome", "22.04.4"],
       printQRInTerminal: false
     });
 
