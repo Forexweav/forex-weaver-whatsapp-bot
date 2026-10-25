@@ -9,6 +9,7 @@ const pino = require("pino");
 
 let reconnectTimer = null;
 let starting = false;
+let currentSocket = null;
 
 async function startBot() {
   if (starting) return;
@@ -21,10 +22,11 @@ async function startBot() {
     const sock = makeWASocket({
       auth: state,
       logger: pino({ level: "silent" }),
-      :
-browser: ["Ubuntu", "Chrome", "22.04.4"],
+      browser: ["Ubuntu", "Chrome", "22.04.4"],
       printQRInTerminal: false
     });
+
+    currentSocket = sock;
 
     let pairingRequested = false;
 
@@ -33,7 +35,11 @@ browser: ["Ubuntu", "Chrome", "22.04.4"],
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
-      if (qr && !state.creds.registered && !pairingRequested) {
+      if (
+        qr &&
+        !state.creds.registered &&
+        !pairingRequested
+      ) {
         const phone = (process.env.BOT_PHONE_NUMBER || "")
           .replace(/\D/g, "");
 
@@ -45,15 +51,18 @@ browser: ["Ubuntu", "Chrome", "22.04.4"],
         pairingRequested = true;
 
         try {
-          console.log("Requesting a pairing code after QR event...");
+          console.log("Requesting WhatsApp pairing code...");
           const code = await sock.requestPairingCode(phone);
           console.log("WhatsApp pairing code:", code);
           console.log(
-            "Enter it promptly in WhatsApp Business > Linked devices > Link a device > Link with phone number instead."
+            "On your phone, open WhatsApp Business > Linked devices > Link a device > Link with phone number instead."
           );
         } catch (error) {
           pairingRequested = false;
-          console.error("Pairing request failed:", error.message);
+          console.error(
+            "Pairing request failed:",
+            error.message
+          );
         }
       }
 
@@ -69,18 +78,22 @@ browser: ["Ubuntu", "Chrome", "22.04.4"],
 
         console.log("WhatsApp disconnected.");
         console.log("Disconnect code:", code ?? "unknown");
-        console.log("Disconnect reason:", reason ?? "not provided");
+        console.log(
+          "Disconnect reason:",
+          reason ?? "not provided"
+        );
+
+        currentSocket = null;
 
         if (code === DisconnectReason.loggedOut) {
-          console.log(
-            "WhatsApp reports logged out. Check the session before pairing again."
+          console.error(
+            "WhatsApp logged out. Check the session before pairing again."
           );
           return;
         }
 
         clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(() => {
-          starting = false;
           startBot().catch(console.error);
         }, 10000);
       }
@@ -102,33 +115,41 @@ browser: ["Ubuntu", "Chrome", "22.04.4"],
 
         const command = text.trim().toLowerCase();
 
-        if (command === "!ping") {
-          await sock.sendMessage(chat, {
-            text: "Pong! 🏓 𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 is responding."
-          });
-        }
+        try {
+          if (command === "!ping") {
+            await sock.sendMessage(chat, {
+              text:
+                "Pong! 🏓 𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 is responding."
+            });
+          }
 
-        if (command === "!menu") {
-          await sock.sendMessage(chat, {
-            text:
-              "𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 WhatsApp Bot\n\n" +
-              "!menu - Show commands\n" +
-              "!ping - Check bot response\n\n" +
-              "Other planned features are not yet implemented."
-          });
+          if (command === "!menu") {
+            await sock.sendMessage(chat, {
+              text:
+                "𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 WhatsApp Bot\n\n" +
+                "!menu - Show commands\n" +
+                "!ping - Check bot response\n\n" +
+                "Other planned features are not yet implemented."
+            });
+          }
+        } catch (error) {
+          console.error(
+            "Failed to process message:",
+            error.message
+          );
         }
       }
     });
 
-    starting = false;
   } catch (error) {
-    starting = false;
     console.error("Bot startup error:", error.message);
 
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       startBot().catch(console.error);
     }, 10000);
+  } finally {
+    starting = false;
   }
 }
 
