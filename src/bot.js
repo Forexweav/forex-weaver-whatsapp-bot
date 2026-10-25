@@ -8,18 +8,20 @@ const {
 const pino = require("pino");
 
 let reconnectTimer = null;
-let pairingRequested = false;
 let starting = false;
+let pairingRequested = false;
 
 async function startBot() {
   if (starting) return;
   starting = true;
 
+  let sock;
+
   try {
     const { state, saveCreds } =
       await useMultiFileAuthState("auth_info");
 
-    const sock = makeWASocket({
+    sock = makeWASocket({
       auth: state,
       logger: pino({ level: "silent" }),
       browser: ["Forex Weaver", "Chrome", "1.0.0"],
@@ -29,39 +31,12 @@ async function startBot() {
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (
-        qr &&
-        !state.creds.registered &&
-        process.env.BOT_PHONE_NUMBER &&
-        !pairingRequested
-      ) {
-        pairingRequested = true;
-
-        try {
-          const phone =
-            process.env.BOT_PHONE_NUMBER.replace(/\D/g, "");
-
-          const code = await sock.requestPairingCode(phone);
-
-          console.log("WhatsApp pairing code:", code);
-          console.log(
-            "On WhatsApp Business, open Linked devices, " +
-            "choose Link a device, then Link with phone number."
-          );
-        } catch (error) {
-          pairingRequested = false;
-          console.error(
-            "Pairing code error:",
-            error.message
-          );
-        }
-      }
+      const { connection, lastDisconnect } = update;
 
       if (connection === "open") {
         console.log("WhatsApp connected successfully!");
         pairingRequested = false;
+        starting = false;
       }
 
       if (connection === "close") {
@@ -80,37 +55,62 @@ async function startBot() {
         starting = false;
 
         if (code !== DisconnectReason.loggedOut) {
-          pairingRequested = false;
           clearTimeout(reconnectTimer);
+          pairingRequested = false;
 
           reconnectTimer = setTimeout(() => {
-            startBot().catch((error) => {
-              console.error("Restart error:", error.message);
-            });
-          }, 5000);
+            startBot().catch(console.error);
+          }, 10000);
         } else {
           console.log(
-            "WhatsApp logged out. Check the disconnect details."
+            "WhatsApp logged out. Check the session before pairing again."
           );
         }
       }
-
-      if (connection === "open") {
-        starting = false;
-      }
     });
+
+    if (!state.creds.registered) {
+      const phone = (process.env.BOT_PHONE_NUMBER || "")
+        .replace(/\D/g, "");
+
+      if (!phone) {
+        console.error(
+          "BOT_PHONE_NUMBER is missing. Check Render Environment."
+        );
+      } else {
+        setTimeout(async () => {
+          if (pairingRequested) return;
+          pairingRequested = true;
+
+          try {
+            const code = await sock.requestPairingCode(phone);
+            console.log("NEW WhatsApp pairing code:", code);
+            console.log(
+              "Enter this code promptly in WhatsApp Business > Linked devices > Link a device > Link with phone number instead."
+            );
+          } catch (error) {
+            pairingRequested = false;
+            console.error(
+              "Pairing code request failed:",
+              error.message
+            );
+          }
+        }, 2000);
+      }
+    }
 
     sock.ev.on("messages.upsert", async ({ messages }) => {
       for (const msg of messages) {
         if (!msg?.message || msg.key.fromMe) continue;
 
         const chat = msg.key.remoteJid;
+        const message = msg.message;
 
         const text =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          msg.message.imageMessage?.caption ||
-          msg.message.videoMessage?.caption ||
+          message.conversation ||
+          message.extendedTextMessage?.text ||
+          message.imageMessage?.caption ||
+          message.videoMessage?.caption ||
           "";
 
         const command = text.trim().toLowerCase();
@@ -125,11 +125,9 @@ async function startBot() {
           await sock.sendMessage(chat, {
             text:
               "𝐅❼ℜᴇˣ ᵂᴇᴬｖᴱᖇ📊 WhatsApp Bot\n\n" +
-              "BASIC COMMANDS\n" +
               "!menu - Show commands\n" +
               "!ping - Check bot response\n\n" +
-              "More planned features must be implemented " +
-              "and tested before they will work."
+              "Other planned features are not yet implemented."
           });
         }
       }
